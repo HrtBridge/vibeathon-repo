@@ -1,27 +1,27 @@
-from state_engine import apply_event
+from state_engine import new_profile, apply_event, unlocked_modules
 
-entity = {
-    "id": "apt_001",
-    "state": "PROPOSED",
-    "created_at": "2026-02-28T11:30:00-06:00",
-    "updated_at": "2026-02-28T11:30:00-06:00",
-    "log": []
-}
+profile = new_profile(business_id="biz_001", owner_id="owner_001")
 
-print("Initial:", entity["state"])
+print("Initial state:", profile["state"])
+print("Unlocked modules:", unlocked_modules(profile["state"]))
 
-entity = apply_event(entity, "CAPTURE_COMMITMENT", by="PATIENT", meta={"method": "deposit_hold_optional"})
-print("After commitment:", entity["state"])
+# 1) Owner declares a lifecycle state (confidential by default)
+profile = apply_event(profile, "DECLARE_STATE", by="OWNER", meta={"state": "EXIT_CURIOUS", "visibility": "PRIVATE"})
+print("\nAfter DECLARE_STATE:", profile["state"], "| visibility:", profile["visibility"])
+print("Unlocked modules:", unlocked_modules(profile["state"]))
 
-entity = apply_event(entity, "FLAG_AT_RISK", by="SYSTEM", meta={"reason": "no_reconfirm_window_elapsed"})
-print("After at-risk:", entity["state"])
+# 2) Owner completes a step (progress indicator)
+profile = apply_event(profile, "COMPLETE_MODULE_STEP", by="OWNER", meta={"module": "timeline_builder", "delta_pct": 20})
+profile = apply_event(profile, "COMPLETE_MODULE_STEP", by="OWNER", meta={"module": "readiness_checklist", "delta_pct": 10})
 
-entity = apply_event(entity, "CAPTURE_COMMITMENT", by="PATIENT", meta={"method": "reconfirm"})
-print("After reconfirm:", entity["state"])
+print("\nProgress:")
+for k, v in profile["modules_progress"].items():
+    print(f" - {k}: {v}%")
 
-entity = apply_event(entity, "CHECK_IN", by="CLINIC")
-print("After check-in:", entity["state"])
+# 3) Optional: owner chooses to make the declaration public later
+profile = apply_event(profile, "TOGGLE_PUBLIC_VISIBILITY", by="OWNER", meta={"visibility": "PUBLIC"})
+print("\nAfter TOGGLE_PUBLIC_VISIBILITY:", profile["visibility"])
 
 print("\nEvent log:")
-for e in entity["log"]:
+for e in profile["log"]:
     print(e)

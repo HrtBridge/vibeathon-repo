@@ -1,28 +1,33 @@
-# Scenario Walkthrough
+# Scenario Walkthrough — Ownership Lifecycle Declaration
 
-## Scenario: Appointment Commitment Flow
+## Core Thesis
+Communities don’t hollow out when businesses fail.
+They hollow out when ownership transitions fail.
 
-Initial state:
-PROPOSED
+Succession is treated as an end-of-life crisis instead of a lifecycle state.
 
-1. Patient captures commitment (deposit hold OR reconfirm)
-→ COMMITTED
+## Scenario: Confidential Lifecycle Declaration → Early Action
 
-2. No reconfirmation window elapses
-→ AT_RISK
+Initial:
+STABLE (default)
 
-3. Patient reconfirms
-→ COMMITTED
+1) Owner declares a lifecycle state (private by default)
+DECLARE_STATE(state=EXIT_CURIOUS, visibility=PRIVATE)
+→ State becomes EXIT_CURIOUS
 
-4. Patient checks in
-→ COMPLETED
+2) State unlocks tailored modules instantly
+- readiness_checklist
+- timeline_builder
+- valuation_conversation_starter
+- financing_pathways_resources
 
-## Why This Matters
+3) Progress becomes visible and actionable
+COMPLETE_MODULE_STEP(module=timeline_builder, +20%)
+COMPLETE_MODULE_STEP(module=readiness_checklist, +10%)
 
-Traditional scheduling systems track time.
-This engine tracks commitment.
+4) Optional: owner later makes the declaration public (without revealing details)
+TOGGLE_PUBLIC_VISIBILITY(visibility=PUBLIC)
 
-The difference:
-- Less no-shows
-- Automatic risk detection
-- Enforceable state transitions
+## Why this matters
+This engine converts private exit uncertainty into structured, early transition action
+without forcing premature public disclosure.
