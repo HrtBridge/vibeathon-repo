@@ -1,0 +1,14 @@
+openapi: 3.0.3
+info:
+  title: Commitment State Engine API
+  version: 0.1.0
+
+paths:
+  /apply-event:
+    post:
+      summary: Apply event to entity and return updated state
+      requestBody:
+        required: true
+      responses:
+        "200":
+          description: Updated entity
