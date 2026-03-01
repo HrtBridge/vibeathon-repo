@@ -14,33 +14,44 @@ def main():
     print(f"Declarations:  {len(eng.declarations)}")
     print()
 
-    # Choose profile that has declarations
+    if not eng.profiles:
+        print("NOTE: No profiles were loaded from CSV exports.")
+        print("This happens when Bubble CSV exports omit the 'Unique ID' column.")
+        print("Re-export lifecycle_profiles and lifecycle_stages including 'Unique ID' to enable readiness scoring.\n")
+
+    # Choose a sample profile if any exist
     sample_uid = None
-    for pid in eng.profiles.keys():
-        if eng.latest_declared_stage_uid_for_profile(pid):
-            sample_uid = pid
-            break
-    if not sample_uid:
-        sample_uid = next(iter(eng.profiles.keys()))
+    if eng.profiles:
+        for pid in eng.profiles.keys():
+            if eng.latest_declared_stage_uid_for_profile(pid):
+                sample_uid = pid
+                break
+        if not sample_uid:
+            sample_uid = next(iter(eng.profiles.keys()))
 
-    p = eng.profiles[sample_uid]
-    s = eng.current_stage(sample_uid)
+    if sample_uid:
+        p = eng.profiles[sample_uid]
+        s = eng.current_stage(sample_uid)
 
-    print("Sample Business Dashboard")
-    print("------------------------")
-    print(f"Business: {p.business_name}")
-    print(f"Email:    {p.email}")
-    print(f"Stage:    {s.name if s else '(none)'}")
-    print()
+        print("Sample Business Dashboard")
+        print("------------------------")
+        print(f"Business: {p.business_name}")
+        print(f"Email:    {p.email}")
+        print(f"Stage:    {s.name if s else '(unknown)'}")
+        print()
 
-    print("Modules for current stage")
-    mods = eng.modules_for_profile(sample_uid)
-    for m in mods:
-        status = "✅" if eng.is_complete(sample_uid, m.uid) else "⬜"
-        print(f"{status} {m.title}  [{m.module_type}]")
-    print()
-    print(f"Succession Readiness: {eng.readiness_percent(sample_uid)}%")
-    print()
+        print("Modules for current stage")
+        mods = eng.modules_for_profile(sample_uid)
+        for m in mods:
+            status = "✅" if eng.is_complete(sample_uid, m.uid) else "⬜"
+            print(f"{status} {m.title}  [{m.module_type}]")
+        print()
+        print(f"Succession Readiness: {eng.readiness_percent(sample_uid)}%")
+        print()
+    else:
+        print("Sample Business Dashboard")
+        print("------------------------")
+        print("(skipped — no profile IDs available)\n")
 
     print("Admin Dashboard (gated)")
     print("-----------------------")
