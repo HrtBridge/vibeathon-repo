@@ -93,6 +93,11 @@ def main():
     admin_email = "brentrosenauer@gmail.com"
     if admin_email in ADMIN_ALLOWLIST:
         print(f"Access GRANTED for {admin_email}")
+        avg_bigq = eng.admin_average_bigq_score()
+        avg_ready = eng.admin_average_readiness_percent()
+        print(f"Average BigQ score: {avg_bigq:.2f}")
+        print(f"Average readiness (response density): {avg_ready:.1f}%")
+
         dist = eng.admin_distribution_by_stage_name()
         print("Declaration distribution:")
         for name, count in dist.items():

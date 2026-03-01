@@ -279,3 +279,56 @@ class ContinuumEngine:
             return 0
         responses = len(self.module_responses)
         return int(round((responses / (profiles * modules)) * 100))
+
+    # --- Admin metrics (mirror Bubble dashboard) ---
+
+    def admin_average_bigq_score(self) -> float:
+        """
+        Average of lifecycle_declarations.bigq_score, ignoring blanks/non-numeric.
+        Supports minor header variations by searching for a column containing 'bigq'.
+        """
+        if not self.declarations:
+            return 0.0
+
+        # Find BigQ column name
+        keys = list(self.declarations[0].keys())
+        bigq_key = None
+        for k in keys:
+            if "bigq" in k.lower():
+                bigq_key = k
+                break
+        if not bigq_key:
+            # common fallback
+            for k in keys:
+                if "score" in k.lower():
+                    bigq_key = k
+                    break
+        if not bigq_key:
+            return 0.0
+
+        vals = []
+        for r in self.declarations:
+            raw = (r.get(bigq_key) or "").strip()
+            if not raw:
+                continue
+            try:
+                vals.append(float(raw))
+            except ValueError:
+                # sometimes Bubble exports weirdly; ignore non-numeric
+                continue
+
+        if not vals:
+            return 0.0
+        return sum(vals) / len(vals)
+
+    def admin_average_readiness_percent(self) -> float:
+        """
+        Bubble metric:
+        module_responses_count / (modules_count * profiles_count) * 100
+        """
+        profiles = len(self.profiles)
+        modules = len(self.modules)
+        if profiles == 0 or modules == 0:
+            return 0.0
+        responses = len(self.module_responses)
+        return (responses / (profiles * modules)) * 100.0
