@@ -1,32 +1,82 @@
 import csv
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
-MODULE_COMPLETED_LIST_FIELD = "(Linked) Lifecycle_Profile_did_complete"
+# Bubble export field names we rely on
 PROFILE_STAGE_FIELD = "(Linked) Lifecycle_Stage"
 MODULE_STAGE_FIELD = "(Linked) Lifecycle_Stage"
 DECL_STAGE_FIELD = "(Linked) Lifecycle_Stage"
 DECL_PROFILE_FIELD = "(Linked) Lifecycle_Profile"
 
+RESP_PROFILE_FIELD = "(Linked) Lifecycle_Profile"
+RESP_MODULE_FIELD = "(Linked) Lifecycle_Module"
 
-def _detect_id_field(rows: List[dict]) -> str:
-    if not rows:
-        return "Unique ID"
-    keys = set(rows[0].keys())
-    for candidate in ("Unique ID", "_id", "unique_id", "uid", "ID"):
-        if candidate in keys:
-            return candidate
-    for k in rows[0].keys():
-        if "id" in k.lower():
-            return k
-    return "Unique ID"
+MODULE_COMPLETED_LIST_FIELD = "(Linked) Lifecycle_Profile_did_complete"
+
+
+def _load_csv(path: str) -> List[dict]:
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
 
 
 def _split_list(cell: Optional[str]) -> List[str]:
     if not cell:
         return []
     return [x.strip() for x in cell.split(",") if x.strip()]
+
+
+def _candidate_id_fields(rows: List[dict]) -> List[str]:
+    if not rows:
+        return []
+    keys = list(rows[0].keys())
+    # Strong candidates first
+    preferred = []
+    for k in keys:
+        lk = k.lower().strip()
+        if lk in ("unique id", "unique_id", "_id", "id", "uid"):
+            preferred.append(k)
+    # Then anything containing id
+    for k in keys:
+        if k not in preferred and "id" in k.lower():
+            preferred.append(k)
+    # Finally, all keys as a last resort (keeps function total)
+    for k in keys:
+        if k not in preferred:
+            preferred.append(k)
+    return preferred
+
+
+def _pick_id_field_by_overlap(rows: List[dict], reference_ids: Set[str]) -> Optional[str]:
+    """
+    Pick the column whose values overlap most with reference_ids.
+    This is the key to making Bubble linked fields joinable.
+    """
+    if not rows:
+        return None
+    candidates = _candidate_id_fields(rows)
+    best: Tuple[int, int, str] = (-1, -1, candidates[0])  # (overlap, nonempty_count, field)
+    for field in candidates:
+        vals = [(r.get(field) or "").strip() for r in rows]
+        nonempty = [v for v in vals if v]
+        overlap = sum(1 for v in nonempty if v in reference_ids)
+        score = (overlap, len(nonempty), field)
+        if score > best:
+            best = score
+    return best[2]
+
+
+def _pick_best_id_field_fallback(rows: List[dict]) -> Optional[str]:
+    if not rows:
+        return None
+    candidates = _candidate_id_fields(rows)
+    # Prefer exact-ish names
+    for target in ("Unique ID", "unique id", "_id", "unique_id", "uid", "ID", "id"):
+        for c in candidates:
+            if c.strip() == target:
+                return c
+    # Otherwise just pick the first candidate
+    return candidates[0]
 
 
 @dataclass
@@ -56,70 +106,98 @@ class Module:
 class ContinuumEngine:
     def __init__(self, exports_dir: str):
         self.exports_dir = exports_dir
+
         self.profiles: Dict[str, Profile] = {}
         self.stages: Dict[str, Stage] = {}
         self.modules: Dict[str, Module] = {}
         self.declarations: List[dict] = []
         self.module_responses: List[dict] = []
 
-    def _load_csv(self, filename: str) -> List[dict]:
-        path = os.path.join(self.exports_dir, filename)
-        with open(path, newline="", encoding="utf-8") as f:
-            return list(csv.DictReader(f))
+        # For transparency/debug
+        self.profile_id_field: Optional[str] = None
+        self.stage_id_field: Optional[str] = None
+        self.module_id_field: Optional[str] = None
 
     def load(self):
+        # Load module_responses first so we can choose ID columns by overlap
+        resp_path = os.path.join(self.exports_dir, "module_responses.csv")
+        try:
+            self.module_responses = _load_csv(resp_path)
+        except FileNotFoundError:
+            self.module_responses = []
+
+        referenced_profile_ids = {
+            (r.get(RESP_PROFILE_FIELD) or "").strip()
+            for r in self.module_responses
+            if (r.get(RESP_PROFILE_FIELD) or "").strip()
+        }
+        referenced_module_ids = {
+            (r.get(RESP_MODULE_FIELD) or "").strip()
+            for r in self.module_responses
+            if (r.get(RESP_MODULE_FIELD) or "").strip()
+        }
+
+        # Declarations (helpful for stage-id overlap if needed)
+        decl_path = os.path.join(self.exports_dir, "lifecycle_declarations.csv")
+        self.declarations = _load_csv(decl_path)
+        referenced_stage_ids = {
+            (r.get(DECL_STAGE_FIELD) or "").strip()
+            for r in self.declarations
+            if (r.get(DECL_STAGE_FIELD) or "").strip()
+        }
+
         # Load stages
-        stage_rows = self._load_csv("lifecycle_stages.csv")
-        id_field_stages = _detect_id_field(stage_rows)
+        stage_rows = _load_csv(os.path.join(self.exports_dir, "lifecycle_stages.csv"))
+        # Try overlap with referenced_stage_ids first; fallback to reasonable ID column
+        self.stage_id_field = _pick_id_field_by_overlap(stage_rows, referenced_stage_ids) if referenced_stage_ids else None
+        if not self.stage_id_field:
+            self.stage_id_field = _pick_best_id_field_fallback(stage_rows)
+
         for r in stage_rows:
-            uid = (r.get(id_field_stages) or "").strip()
+            uid = (r.get(self.stage_id_field) or "").strip()
             if not uid:
                 continue
             self.stages[uid] = Stage(
                 uid=uid,
                 name=r.get("name", "") or r.get("Name", ""),
-                description=r.get("long_description", "") or r.get("description", "")
+                description=r.get("long_description", "") or r.get("description", "") or r.get("Description", ""),
             )
 
         # Load profiles
-        profile_rows = self._load_csv("lifecycle_profiles.csv")
-        id_field_profiles = _detect_id_field(profile_rows)
+        profile_rows = _load_csv(os.path.join(self.exports_dir, "lifecycle_profiles.csv"))
+        self.profile_id_field = _pick_id_field_by_overlap(profile_rows, referenced_profile_ids) if referenced_profile_ids else None
+        if not self.profile_id_field:
+            self.profile_id_field = _pick_best_id_field_fallback(profile_rows)
+
         for r in profile_rows:
-            uid = (r.get(id_field_profiles) or "").strip()
+            uid = (r.get(self.profile_id_field) or "").strip()
             if not uid:
                 continue
-            stage_uid = (r.get(PROFILE_STAGE_FIELD) or "").strip() or None
             self.profiles[uid] = Profile(
                 uid=uid,
-                business_name=r.get("business_name", "") or r.get("Business Name", ""),
+                business_name=r.get("business_name", "") or r.get("Business Name", "") or r.get("name", "") or r.get("Name", ""),
                 email=r.get("email", "") or r.get("Email", ""),
-                current_stage_uid=stage_uid,
+                current_stage_uid=(r.get(PROFILE_STAGE_FIELD) or "").strip() or None,
             )
 
         # Load modules
-        module_rows = self._load_csv("lifecycle_modules.csv")
-        id_field_modules = _detect_id_field(module_rows)
+        module_rows = _load_csv(os.path.join(self.exports_dir, "lifecycle_modules.csv"))
+        self.module_id_field = _pick_id_field_by_overlap(module_rows, referenced_module_ids) if referenced_module_ids else None
+        if not self.module_id_field:
+            self.module_id_field = _pick_best_id_field_fallback(module_rows)
+
         for r in module_rows:
-            uid = (r.get(id_field_modules) or "").strip()
+            uid = (r.get(self.module_id_field) or "").strip()
             if not uid:
                 continue
             completed_list = _split_list(r.get(MODULE_COMPLETED_LIST_FIELD) or "")
             self.modules[uid] = Module(
                 uid=uid,
-                title=r.get("title", "") or r.get("Title", "") or r.get("name", "") or r.get("Name", ""),
-                module_type=r.get("module_type", "") or r.get("Module Type", ""),
+                title=r.get("title", "") or r.get("Title", "") or r.get("name", "") or r.get("Name", "") or "(untitled module)",
+                module_type=r.get("module_type", "") or r.get("Module Type", "") or r.get("type", ""),
                 stage_uid=(r.get(MODULE_STAGE_FIELD) or "").strip() or None,
                 completed_profiles=completed_list,
             )
-
-        # Load declarations
-        self.declarations = self._load_csv("lifecycle_declarations.csv")
-
-        # Load module responses (Bubble readiness logic)
-        try:
-            self.module_responses = self._load_csv("module_responses.csv")
-        except FileNotFoundError:
-            self.module_responses = []
 
     def latest_declared_stage_uid_for_profile(self, profile_uid: str) -> Optional[str]:
         latest = None
@@ -128,7 +206,7 @@ class ContinuumEngine:
             pid = (r.get(DECL_PROFILE_FIELD) or "").strip()
             if pid != profile_uid:
                 continue
-            ts = (r.get("created_at") or r.get("Creation Date") or "").strip()
+            ts = (r.get("created_at") or r.get("Creation Date") or r.get("Created Date") or r.get("creation_date") or "").strip()
             if ts >= latest_time:
                 latest_time = ts
                 latest = r
@@ -145,41 +223,52 @@ class ContinuumEngine:
         return self.latest_declared_stage_uid_for_profile(profile_uid)
 
     def current_stage(self, profile_uid: str) -> Optional[Stage]:
-        stage_uid = self.current_stage_uid(profile_uid)
-        if not stage_uid:
+        sid = self.current_stage_uid(profile_uid)
+        if not sid:
             return None
-        return self.stages.get(stage_uid)
+        return self.stages.get(sid)
 
-    def modules_for_profile(self, profile_uid: str) -> List[Module]:
-        stage_uid = self.current_stage_uid(profile_uid)
-        if not stage_uid:
+    def modules_for_profile(self, profile_uid: str, view_all: bool = False) -> List[Module]:
+        mods = list(self.modules.values())
+        if view_all:
+            return sorted(mods, key=lambda m: (m.stage_uid or "", m.title.lower()))
+
+        sid = self.current_stage_uid(profile_uid)
+        if not sid:
             return []
-        return [m for m in self.modules.values() if m.stage_uid == stage_uid]
+        stage_mods = [m for m in mods if m.stage_uid == sid]
+        return sorted(stage_mods, key=lambda m: m.title.lower())
+
+    def is_complete(self, profile_uid: str, module_uid: str) -> bool:
+        # Prefer explicit completion list if present
+        m = self.modules.get(module_uid)
+        if m and profile_uid in (m.completed_profiles or []):
+            return True
+
+        # Fall back to Module_Response existence
+        for r in self.module_responses:
+            if (r.get(RESP_PROFILE_FIELD) or "").strip() == profile_uid and (r.get(RESP_MODULE_FIELD) or "").strip() == module_uid:
+                return True
+        return False
 
     def readiness_percent(self, profile_uid: str) -> int:
         """
-        Mirrors Bubble logic:
-        number of Module_Responses for this profile
-        divided by total module count.
+        Mirrors Bubble-style completion tracking:
+        count Module_Responses for this profile / total module count
         """
         total_modules = len(self.modules)
         if total_modules == 0:
             return 0
-
-        responses = [
-            r for r in self.module_responses
-            if (r.get("(Linked) Lifecycle_Profile") or "").strip() == profile_uid
-        ]
-
-        return int(round((len(responses) / total_modules) * 100))
+        completed = sum(1 for r in self.module_responses if (r.get(RESP_PROFILE_FIELD) or "").strip() == profile_uid)
+        return int(round((completed / total_modules) * 100))
 
     def admin_distribution_by_stage_name(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
         for r in self.declarations:
-            stage_uid = (r.get(DECL_STAGE_FIELD) or "").strip()
-            if not stage_uid:
+            sid = (r.get(DECL_STAGE_FIELD) or "").strip()
+            if not sid:
                 continue
-            name = self.stages.get(stage_uid).name if stage_uid in self.stages else stage_uid
+            name = self.stages.get(sid).name if sid in self.stages else sid
             counts[name] = counts.get(name, 0) + 1
         return counts
 
@@ -189,5 +278,4 @@ class ContinuumEngine:
         if profiles == 0 or modules == 0:
             return 0
         responses = len(self.module_responses)
-        pct = (responses / (modules * profiles)) * 100
-        return int(round(pct))
+        return int(round((responses / (profiles * modules)) * 100))
