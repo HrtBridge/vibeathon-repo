@@ -1,4 +1,4 @@
-from state_engine.engine import ContinuumEngine
+from .engine import ContinuumEngine
 
 ADMIN_ALLOWLIST = {"brentrosenauer@gmail.com"}
 
@@ -14,8 +14,15 @@ def main():
     print(f"Declarations:  {len(eng.declarations)}")
     print()
 
-    # Pick a sample profile
-    sample_uid = next(iter(eng.profiles.keys()))
+    # Choose profile that has declarations
+    sample_uid = None
+    for pid in eng.profiles.keys():
+        if eng.latest_declared_stage_uid_for_profile(pid):
+            sample_uid = pid
+            break
+    if not sample_uid:
+        sample_uid = next(iter(eng.profiles.keys()))
+
     p = eng.profiles[sample_uid]
     s = eng.current_stage(sample_uid)
 
@@ -23,13 +30,11 @@ def main():
     print("------------------------")
     print(f"Business: {p.business_name}")
     print(f"Email:    {p.email}")
-    print(f"Stage:    {s.name if s else '(no stage set on profile)'}")
-    if eng.profile_stage_field_used:
-        print(f"(Stage sourced from profile field: {eng.profile_stage_field_used})")
+    print(f"Stage:    {s.name if s else '(none)'}")
     print()
 
     print("Modules for current stage")
-    mods = eng.modules_for_profile(sample_uid, view_all=False)
+    mods = eng.modules_for_profile(sample_uid)
     for m in mods:
         status = "✅" if eng.is_complete(sample_uid, m.uid) else "⬜"
         print(f"{status} {m.title}  [{m.module_type}]")
@@ -42,12 +47,10 @@ def main():
     admin_email = "brentrosenauer@gmail.com"
     if admin_email in ADMIN_ALLOWLIST:
         print(f"Access GRANTED for {admin_email}")
-        dist = eng.admin_distribution_by_stage_uid()
-        print("Declaration distribution (by stage):")
-        for stage_uid, count in dist.items():
-            stage = eng.stages.get(stage_uid)
-            label = stage.name if stage else stage_uid
-            print(f"- {label}: {count}")
+        dist = eng.admin_distribution_by_stage_name()
+        print("Declaration distribution:")
+        for name, count in dist.items():
+            print(f"- {name}: {count}")
     else:
         print(f"Access DENIED for {admin_email}")
 

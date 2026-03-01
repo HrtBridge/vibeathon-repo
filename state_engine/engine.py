@@ -1,35 +1,8 @@
-from __future__ import annotations
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Any, Tuple
 import csv
-import pathlib
+import os
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
-MODULE_COMPLETED_LIST_FIELD = "(Linked) Lifecycle_Profile_did_complete"
-
-def _read_csv(path: str) -> Tuple[List[Dict[str, str]], List[str]]:
-    p = pathlib.Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Missing required CSV: {path}")
-    with p.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-        cols = reader.fieldnames or []
-    return rows, cols
-
-def _bubble_uid(row: Dict[str, str]) -> str:
-    return row.get("Unique ID") or row.get("unique_id") or row.get("uid") or ""
-
-def _split_list(cell: Optional[str]) -> List[str]:
-    if not cell:
-        return []
-    parts = [p.strip() for p in cell.split(",")]
-    return [p for p in parts if p]
-
-def _get(row: Dict[str, str], *names: str) -> str:
-    for n in names:
-        if n in row and row[n]:
-            return row[n]
-    return ""
 
 @dataclass
 class Profile:
@@ -37,158 +10,124 @@ class Profile:
     business_name: str
     email: str
     current_stage_uid: Optional[str]
-    raw: Dict[str, Any]
+
 
 @dataclass
 class Stage:
     uid: str
     name: str
-    raw: Dict[str, Any]
+    description: str
+
 
 @dataclass
 class Module:
     uid: str
-    stage_uid: Optional[str]
-    module_type: str
     title: str
-    description: str
-    url: Optional[str]
-    checklist: List[str]
-    form_question: Optional[str]
-    completed_profile_uids: List[str]
-    raw: Dict[str, Any]
+    module_type: str
+    stage_uid: Optional[str]
+    completed_profiles: List[str]
+
 
 class ContinuumEngine:
-    """
-    Reference engine that mirrors Bubble prototype behavior:
-    - current stage stored on Lifecycle_Profile (latest declaration written there)
-    - modules filtered by current stage (or view-all)
-    - completion stored on module as list of completed profiles:
-      `(Linked) Lifecycle_Profile_did_complete`
-    """
-
-    def __init__(self, exports_dir: str = "bubble_exports"):
+    def __init__(self, exports_dir: str):
         self.exports_dir = exports_dir
         self.profiles: Dict[str, Profile] = {}
         self.stages: Dict[str, Stage] = {}
         self.modules: Dict[str, Module] = {}
-        self.declarations: List[Dict[str, str]] = []
+        self.declarations: List[dict] = []
 
-        # discovered during load (for debugging)
-        self.profile_stage_field_used: Optional[str] = None
-        self.module_title_field_used: Optional[str] = None
+    def _load_csv(self, filename: str) -> List[dict]:
+        path = os.path.join(self.exports_dir, filename)
+        with open(path, newline="", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
 
-    def load(self) -> None:
-        # stages
-        stage_rows, _ = _read_csv(f"{self.exports_dir}/lifecycle_stages.csv")
-        for r in stage_rows:
-            uid = _bubble_uid(r)
-            name = _get(r, "name", "Name", "stage_name")
-            self.stages[uid] = Stage(uid=uid, name=name, raw=r)
-
-        # profiles
-        profile_rows, profile_cols = _read_csv(f"{self.exports_dir}/lifecycle_profiles.csv")
-
-        # best-effort: find a column that looks like current stage link
-        candidate_fields = [
-            "(Linked) Lifecycle_Stage_current",
-            "(Linked) Lifecycle_Stage",
-            "(Linked) current_lifecycle_stage",
-            "current_stage",
-        ]
-        existing_candidates = [c for c in candidate_fields if c in profile_cols]
-
-        for r in profile_rows:
-            uid = _bubble_uid(r)
-            business_name = _get(r, "business_name", "Business Name", "name", "Name")
-            email = _get(r, "email", "Email")
-
-            current_stage_uid = None
-            for c in existing_candidates:
-                if r.get(c):
-                    current_stage_uid = r.get(c)
-                    self.profile_stage_field_used = c
-                    break
-
-            self.profiles[uid] = Profile(
-                uid=uid,
-                business_name=business_name,
-                email=email,
-                current_stage_uid=current_stage_uid,
-                raw=r,
+    def load(self):
+        # Load stages
+        for r in self._load_csv("lifecycle_stages.csv"):
+            self.stages[r["_id"]] = Stage(
+                uid=r["_id"],
+                name=r.get("name", ""),
+                description=r.get("description", "")
             )
 
-        # modules
-        module_rows, module_cols = _read_csv(f"{self.exports_dir}/lifecycle_modules.csv")
-        title_candidates = [c for c in ["title", "Title", "name", "Name"] if c in module_cols]
-
-        for r in module_rows:
-            uid = _bubble_uid(r)
-            stage_uid = _get(r, "(Linked) Lifecycle_Stage", "lifecycle_stage")
-            module_type = _get(r, "module_type", "Module Type", "type")
-            title = ""
-            for c in title_candidates:
-                if r.get(c):
-                    title = r.get(c)
-                    self.module_title_field_used = c
-                    break
-            description = _get(r, "description", "Description")
-
-            url = _get(r, "ModuleTypeURL_link") or None
-            checklist = _split_list(_get(r, "ModuleTypeChecklist_list"))
-            form_q = _get(r, "ModuleTypeForm_Question") or None
-
-            completed = _split_list(r.get(MODULE_COMPLETED_LIST_FIELD) or "")
-
-            self.modules[uid] = Module(
-                uid=uid,
-                stage_uid=stage_uid or None,
-                module_type=module_type,
-                title=title or "(untitled module)",
-                description=description,
-                url=url,
-                checklist=checklist,
-                form_question=form_q,
-                completed_profile_uids=completed,
-                raw=r,
+        # Load profiles
+        for r in self._load_csv("lifecycle_profiles.csv"):
+            self.profiles[r["_id"]] = Profile(
+                uid=r["_id"],
+                business_name=r.get("business_name", ""),
+                email=r.get("email", ""),
+                current_stage_uid=r.get("(Linked) Lifecycle_Stage") or None
             )
 
-        # declarations (for admin aggregation)
-        decl_rows, _ = _read_csv(f"{self.exports_dir}/lifecycle_declarations.csv")
-        self.declarations = decl_rows
+        # Load modules
+        for r in self._load_csv("lifecycle_modules.csv"):
+            completed = r.get("(Linked) Lifecycle_Profile_did_complete") or ""
+            completed_list = [x.strip() for x in completed.split(",") if x.strip()]
+            self.modules[r["_id"]] = Module(
+                uid=r["_id"],
+                title=r.get("title", ""),
+                module_type=r.get("module_type", ""),
+                stage_uid=r.get("(Linked) Lifecycle_Stage") or None,
+                completed_profiles=completed_list
+            )
 
-    def current_stage(self, profile_uid: str) -> Optional[Stage]:
-        p = self.profiles.get(profile_uid)
-        if not p or not p.current_stage_uid:
+        # Load declarations
+        self.declarations = self._load_csv("lifecycle_declarations.csv")
+
+    def latest_declared_stage_uid_for_profile(self, profile_uid: str) -> Optional[str]:
+        latest = None
+        latest_time = ""
+        for r in self.declarations:
+            pid = r.get("(Linked) Lifecycle_Profile") or ""
+            if pid != profile_uid:
+                continue
+            ts = r.get("created_at") or r.get("Created Date") or ""
+            if ts >= latest_time:
+                latest_time = ts
+                latest = r
+        if not latest:
             return None
-        return self.stages.get(p.current_stage_uid)
+        return latest.get("(Linked) Lifecycle_Stage") or None
 
-    def modules_for_profile(self, profile_uid: str, view_all: bool = False) -> List[Module]:
+    def current_stage_uid(self, profile_uid: str) -> Optional[str]:
         p = self.profiles.get(profile_uid)
         if not p:
-            return []
-        if view_all or not p.current_stage_uid:
+            return None
+        if p.current_stage_uid:
+            return p.current_stage_uid
+        return self.latest_declared_stage_uid_for_profile(profile_uid)
+
+    def current_stage(self, profile_uid: str) -> Optional[Stage]:
+        stage_uid = self.current_stage_uid(profile_uid)
+        if not stage_uid:
+            return None
+        return self.stages.get(stage_uid)
+
+    def modules_for_profile(self, profile_uid: str, view_all: bool = False) -> List[Module]:
+        stage_uid = self.current_stage_uid(profile_uid)
+        if view_all or not stage_uid:
             return list(self.modules.values())
-        return [m for m in self.modules.values() if m.stage_uid == p.current_stage_uid]
+        return [m for m in self.modules.values() if m.stage_uid == stage_uid]
 
     def is_complete(self, profile_uid: str, module_uid: str) -> bool:
         m = self.modules.get(module_uid)
         if not m:
             return False
-        return profile_uid in m.completed_profile_uids
+        return profile_uid in m.completed_profiles
 
     def readiness_percent(self, profile_uid: str) -> int:
-        mods = self.modules_for_profile(profile_uid, view_all=False)
+        mods = self.modules_for_profile(profile_uid)
         if not mods:
             return 0
-        done = sum(1 for m in mods if self.is_complete(profile_uid, m.uid))
-        return int(round(done / len(mods) * 100))
+        complete = sum(1 for m in mods if self.is_complete(profile_uid, m.uid))
+        return int((complete / len(mods)) * 100)
 
-    def admin_distribution_by_stage_uid(self) -> Dict[str, int]:
+    def admin_distribution_by_stage_name(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
         for r in self.declarations:
-            stage_uid = r.get("(Linked) Lifecycle_Stage") or r.get("lifecycle_stage") or ""
+            stage_uid = r.get("(Linked) Lifecycle_Stage") or ""
             if not stage_uid:
                 continue
-            counts[stage_uid] = counts.get(stage_uid, 0) + 1
+            name = self.stages.get(stage_uid).name if stage_uid in self.stages else stage_uid
+            counts[name] = counts.get(name, 0) + 1
         return counts
